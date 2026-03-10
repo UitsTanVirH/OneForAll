@@ -131,8 +131,13 @@ window.adManOpenStore = function (url) {
     
     var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.userAgent.includes('Macintosh');
     const clickTag = isIOS ? IOS_STORE_URL : ANDROID_STORE_URL;
-    if(typeof mraid !== 'undefined' && mraid.open) { mraid.open(clickTag); }
-}
+    if(typeof mraid !== 'undefined' && mraid.open) { 
+      mraid.open(clickTag); 
+    }
+    else {
+      window.open(clickTag);
+    }
+  }
 </script>"
 
 INJECT_META_SCRIPT="<script>
@@ -144,6 +149,9 @@ window.adManOpenStore = function (url) {
     var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.userAgent.includes('Macintosh');
     const clickTag = isIOS ? IOS_STORE_URL : ANDROID_STORE_URL;
     if(typeof FbPlayableAd !== 'undefined' && FbPlayableAd.onCTAClick) { FbPlayableAd.onCTAClick(); 
+    }
+    else {
+      window.open(clickTag);
     }
 }
 </script>"
