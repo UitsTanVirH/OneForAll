@@ -52,11 +52,15 @@ zip_folder() {
   find "$folder" -mindepth 1 ! -name "$(basename "$zip_path")" -delete
 }
 
-
 inject_script() {
   local file="$1"
   local script="$2"
   awk -v insert="$script" '/<div/ && !done { print insert; done=1 } { print }' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+}
+
+inject_mraid_js() {
+  local file="$1"
+  sed -i 's|<head>|<head>\n<script src="mraid.js"></script>|' "$file"
 }
 
 # --- INPUT FUNCTION ---
@@ -122,24 +126,46 @@ trap 'rm -f "$CLEAN_HTML"' EXIT
 sed -e 's/Cocos Creator | //g' -e 's|<script type="text/javascript" src="https://tpc.googlesyndication.com/pagead/gadgets/html5/api/exitapi.js"></script>||g' "$ORIGINAL_HTML" > "$CLEAN_HTML"
 echo "------------------------------------------------"
 
-# --- INJECTION SCRIPT ---
+# --- INJECTION SCRIPTS ---
+
+# Robust MRAID script used for ALL MRAID-based networks:
+# Adwords, IronSource, Smadex, Vungle, Applovin, Unity, Tiktok, Google, Liftoff, Pangle
+# - mraid.js injected into <head> via inject_mraid_js() for early loading
+# - Handles race condition where ready event fires before listener is attached
+# - Falls back to window.open for browser testing
 INJECT_MRAID_SCRIPT="<script>
 window.adManOpenStore = function (url) {
     console.log('Overwritten openStore called!');
-    const IOS_STORE_URL = '$IOS_URL';
-    const ANDROID_STORE_URL = '$ANDROID_URL';
-    
     var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.userAgent.includes('Macintosh');
-    const clickTag = isIOS ? IOS_STORE_URL : ANDROID_STORE_URL;
-    if(typeof mraid !== 'undefined' && mraid.open) { 
-      mraid.open(clickTag); 
+    var clickTag = isIOS ? '$IOS_URL' : '$ANDROID_URL';
+    if (typeof mraid !== 'undefined' && mraid.open) {
+        mraid.open(clickTag);
+    } else {
+        window.open(clickTag);
     }
-    else {
-      window.open(clickTag);
+};
+
+function setupMRAID() {
+    var state = mraid.getState();
+    if (state === 'loading') {
+        mraid.addEventListener('ready', function() {
+            mraid.addEventListener('stateChange', function(newState) {});
+        });
+    } else {
+        mraid.addEventListener('stateChange', function(newState) {});
     }
-  }
+}
+
+if (typeof mraid !== 'undefined') {
+    setupMRAID();
+} else {
+    window.addEventListener('load', function() {
+        if (typeof mraid !== 'undefined') setupMRAID();
+    });
+}
 </script>"
 
+# Meta script used for Facebook and Moloco
 INJECT_META_SCRIPT="<script>
 window.adManOpenStore = function (url) {
     console.log('Overwritten openStore called!');
@@ -148,43 +174,54 @@ window.adManOpenStore = function (url) {
     
     var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.userAgent.includes('Macintosh');
     const clickTag = isIOS ? IOS_STORE_URL : ANDROID_STORE_URL;
-    if(typeof FbPlayableAd !== 'undefined' && FbPlayableAd.onCTAClick) { FbPlayableAd.onCTAClick(); 
-    }
-    else {
-      window.open(clickTag);
+    if (typeof FbPlayableAd !== 'undefined' && FbPlayableAd.onCTAClick) {
+        FbPlayableAd.onCTAClick();
+    } else {
+        window.open(clickTag);
     }
 }
 </script>"
 
-LOWER_HTML_FOLDERS=(Adwords IronSource Smadex Moloco Vungle Applovin Unity Tiktok)
-echo "Generating standard HTML network folders..."
-for folder in "${LOWER_HTML_FOLDERS[@]}"; do
+# --- MRAID HTML FOLDERS (single file, no zip) ---
+MRAID_HTML_FOLDERS=(Adwords IronSource Smadex Vungle Applovin Unity Tiktok)
+echo "Generating MRAID HTML network folders..."
+for folder in "${MRAID_HTML_FOLDERS[@]}"; do
   mkdir -p "$folder"
   target_html="$folder/$folder.html"
   cp "$CLEAN_HTML" "$target_html"
-
-  if [[ "$folder" != "Moloco" ]]; then
-    inject_script "$target_html" "$INJECT_MRAID_SCRIPT"
-  else
-    inject_script "$target_html" "$INJECT_META_SCRIPT"
-  fi
+  inject_mraid_js "$target_html"
+  inject_script "$target_html" "$INJECT_MRAID_SCRIPT"
+  echo "  ✔ $folder"
 done
 
-INDEX_ZIP_FOLDERS=(Google Liftoff Pangle)
-echo "Generating Zipped network folders..."
-for folder in "${INDEX_ZIP_FOLDERS[@]}"; do
+# --- MOLOCO (Meta script, single file) ---
+echo "Generating Moloco folder..."
+mkdir -p Moloco
+cp "$CLEAN_HTML" "Moloco/Moloco.html"
+inject_script "Moloco/Moloco.html" "$INJECT_META_SCRIPT"
+echo "  ✔ Moloco"
+
+# --- MRAID ZIPPED FOLDERS ---
+MRAID_ZIP_FOLDERS=(Google Liftoff Pangle)
+echo "Generating zipped MRAID network folders..."
+for folder in "${MRAID_ZIP_FOLDERS[@]}"; do
   mkdir -p "$folder"
   target_html="$folder/index.html"
   cp "$CLEAN_HTML" "$target_html"
+  inject_mraid_js "$target_html"
   inject_script "$target_html" "$INJECT_MRAID_SCRIPT"
   zip_folder "$folder" "$folder/$folder.zip"
+  echo "  ✔ $folder"
 done
 
+# --- MINTEGRAL ---
 echo "Processing Mintegral..."
 mkdir -p Mintegral
 cp -r "$MINTEGRAL_SRC/"* Mintegral/
 zip_folder "Mintegral" "Mintegral/Mintegral.zip"
+echo "  ✔ Mintegral"
 
+# --- FACEBOOK ---
 echo "Processing Facebook..."
 mkdir -p Facebook
 cp -r "$FACEBOOK_SRC/"* Facebook/
@@ -195,8 +232,9 @@ if [[ -f "Facebook/index.html" ]]; then
   rm -f Facebook/index.html.bak
 fi
 zip_folder "Facebook" "Facebook/Facebook.zip"
+echo "  ✔ Facebook"
 
-# --- ADIKTEEV PROCESSING ---
+# --- ADIKTEEV ---
 echo "Processing Adikteev..."
 mkdir -p Adikteev
 
@@ -220,22 +258,22 @@ if [[ -d "$FACEBOOK_SRC/js" ]]; then
     cp -r "$FACEBOOK_SRC/js" Adikteev/
 fi
 
-# --- LinKsChanged in creative.js ---
 CREATIVE_JS="Adikteev/creative.js"
 if [[ -f "$CREATIVE_JS" ]]; then
     echo "  Updating Store URLs in creative.js..."
-    
     SAFE_IOS="${IOS_URL//&/\\&}"
     SAFE_ANDROID="${ANDROID_URL//&/\\&}"
-
     sed -i "s|^.*const IOS_STORE_URL =.*$|const IOS_STORE_URL = \"$SAFE_IOS\";|g" "$CREATIVE_JS"
     sed -i "s|^.*const ANDROID_STORE_URL =.*$|const ANDROID_STORE_URL = \"$SAFE_ANDROID\";|g" "$CREATIVE_JS"
-    
     echo "  URLs updated successfully."
 else
     echo "Warning: creative.js not found in Adikteev folder. Skipping URL update."
 fi
+
 echo "Zipping Adikteev..."
 zip_folder "Adikteev" "Adikteev/Adikteev.zip"
+echo "  ✔ Adikteev"
 
-echo "Export structure created successfully!"
+echo "------------------------------------------------"
+echo "✅ Export structure created successfully!"
+echo "------------------------------------------------"
